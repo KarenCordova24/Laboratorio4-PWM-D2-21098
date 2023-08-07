@@ -1,86 +1,149 @@
-// Karen Córdova- 21098- Pre lab ESP IDF
-
 #include <stdio.h>
-#include <driver/gpio.h>
-#include <driver/ledc.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
 
-#define pinServo 22
-#define ServoMsMin 0.06
-#define ServoMsMax 2.1
+#define LED_R       (23)  // GPIO para el LED Rojo
+#define LED_G       (22)  // GPIO para el LED Verde
+#define LED_B       (21)  // GPIO para el LED Azul
+#define BTN_COLOR_SELECT (18)  // GPIO para el botón de selección de color (B3)
+#define BTN_BRIGHTNESS   (19)  // GPIO para el botón de brillo (B4)
 
-#define BTNAumentar 4
-#define BTNDisminuir 5
+#define LEDC_TEST_CH_NUM       (3) // Número de canales PWM utilizados (uno por cada color)
+#define LEDC_TEST_DUTY         (5000) // Valor máximo del ciclo de trabajo (máximo brillo)
+#define LEDC_TEST_FADE_TIME    (100) // Tiempo de desvanecimiento (ms) para cambios de brillo más suaves
 
-int servoPosition = 90;
-
-void pwm_servo_control(int angle) {
-    // Calcular el valor del duty necesario para el ángulo dado
-    int duty = (int)(100.0 * ((ServoMsMin + (ServoMsMax - ServoMsMin) * angle / 180.0) / 20.0) * 81.91);
-    // Configurar el duty para el canal LEDC_CHANNEL_0 en modo LEDC_LOW_SPEED_MODE
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
-    // Actualizar el duty para que se refleje en la señal PWM
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+void delay_ms(int ms) {
+    vTaskDelay(pdMS_TO_TICKS(ms));
 }
 
-void app_main(void) {
-    printf("LEDC&Servo Motor\n");
+void app_main(void)
+{
+     
+    int brightness = 0; // Variable para almacenar el brillo actual del LED seleccionado
+    int color_selected = 0; // Variable para indicar el LED seleccionado (0 = No seleccionado, 1 = Rojo, 2 = Verde, 3 = Azul)
 
-    // Configurar el módulo LEDC para controlar el servo
+    gpio_set_direction(LED_R, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LED_G, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LED_B, GPIO_MODE_OUTPUT);
+    gpio_set_direction(BTN_COLOR_SELECT, GPIO_MODE_INPUT);
+    gpio_set_direction(BTN_BRIGHTNESS, GPIO_MODE_INPUT);
+
+    gpio_set_pull_mode(BTN_COLOR_SELECT, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(BTN_BRIGHTNESS, GPIO_PULLUP_ONLY);
+
+    // Configuración de los temporizadores del LEDC
     ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .timer_num = LEDC_TIMER_0,
-        .duty_resolution = LEDC_TIMER_13_BIT,
-        .freq_hz = 50,
-        .clk_cfg = LEDC_AUTO_CLK
+        .duty_resolution = LEDC_TIMER_13_BIT, // resolución del ciclo de trabajo PWM
+        .freq_hz = 5000,                      // frecuencia de la señal PWM
+        .speed_mode = LEDC_LOW_SPEED_MODE,    // modo del temporizador (baja velocidad)
+        .timer_num = LEDC_TIMER_1,            // índice del temporizador
+        .clk_cfg = LEDC_AUTO_CLK,             // seleccionar automáticamente el reloj fuente
     };
+    
     ledc_timer_config(&ledc_timer);
-    ledc_channel_config_t ledc_channel = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER_0,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = pinServo,
-        .duty = 0,
-        .hpoint = 0
+
+    // Configuración de los canales del LEDC para los LEDs RGB
+    ledc_channel_config_t ledc_channel[LEDC_TEST_CH_NUM] = {
+        {
+            .channel    = LEDC_CHANNEL_0,
+            .duty       = 0,
+            .gpio_num   = LED_R,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_TIMER_1
+        },
+        {
+            .channel    = LEDC_CHANNEL_1,
+            .duty       = 0,
+            .gpio_num   = LED_G,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_TIMER_1
+        },
+        {
+            .channel    = LEDC_CHANNEL_2,
+            .duty       = 0,
+            .gpio_num   = LED_B,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_TIMER_1
+        },
     };
-    ledc_channel_config(&ledc_channel);
 
-    // Configurar pines de botones como entradas con pull-up
-    gpio_config_t btn_config;
-    btn_config.intr_type = GPIO_INTR_DISABLE;
-    btn_config.mode = GPIO_MODE_INPUT;
-    btn_config.pin_bit_mask = (1ULL << BTNAumentar) | (1ULL << BTNDisminuir);
-    btn_config.pull_up_en = GPIO_PULLUP_ENABLE;
-    gpio_config(&btn_config);
+    // Inicializar los canales del LEDC
+    for (int ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
+        ledc_channel_config(&ledc_channel[ch]);
+    }
 
-    // Calibrar el servo en la posición inicial
-    pwm_servo_control(servoPosition);
+    // Estado anterior del botón de selección de color (1 = no presionado)
+    int last_btn_color_state = 1;
 
-    while (1) {
-        // Leer el estado de los botones
-        int boton_aumentar_state = gpio_get_level(BTNAumentar);
-        int boton_disminuir_state = gpio_get_level(BTNDisminuir);
+    while (1)
+    {
+        // Leer el estado actual del botón de selección de color (B3)
+        int btn_color_state = gpio_get_level(BTN_COLOR_SELECT);
 
-        // Aumentar la posición del servo si se presiona el botón de aumentar
-        if (boton_aumentar_state == 0) {
-            servoPosition++;
-            if (servoPosition > 180) {
-                servoPosition = 180;
+        // Verificar si se presionó el botón de selección de color (B3)
+        if (btn_color_state == 0 && last_btn_color_state == 1)
+        {
+            // Apagar el LED anterior (si está encendido)
+            if (color_selected == 1) {
+                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
+                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+            } else if (color_selected == 2) {
+                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
+                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+            } else if (color_selected == 3) {
+                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
+                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             }
-            pwm_servo_control(servoPosition);
-            vTaskDelay(200 / portTICK_PERIOD_MS); // Pequeño retraso para evitar rebotes
+
+            color_selected = (color_selected + 1) % 4; // Cambiar al siguiente color (Rojo -> Verde -> Azul -> No seleccionado)
+            
+            delay_ms(200); // Pequeño retardo para evitar rebotes del botón
         }
 
-        // Disminuir la posición del servo si se presiona el botón de disminuir
-        if (boton_disminuir_state == 0) {
-            servoPosition--;
-            if (servoPosition < 0) {
-                servoPosition = 0;
+        // Actualizar el estado del botón de selección de color
+        last_btn_color_state = btn_color_state;
+
+        // Leer el estado actual del botón de brillo (B4)
+        int btn_brightness_state = gpio_get_level(BTN_BRIGHTNESS);
+
+        // Verificar si se presionó el botón de brillo (B4)
+        if (btn_brightness_state == 0)
+        {
+            brightness += 500; // Aumentar el brillo en 500 unidades
+
+            // Si el brillo alcanza el valor máximo, reiniciar a 0
+            if (brightness >= LEDC_TEST_DUTY)
+            {
+                brightness = 0;
             }
-            pwm_servo_control(servoPosition);
-            vTaskDelay(200 / portTICK_PERIOD_MS); // Pequeño retraso para evitar rebotes
+
+            delay_ms(200); // Pequeño retardo para evitar rebotes del botón
         }
+
+        // Configurar el brillo del LED seleccionado
+        if (color_selected == 1) { // Rojo seleccionado
+            ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, brightness);
+            ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+        } else if (color_selected == 2) { // Verde seleccionado
+            ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, brightness);
+            ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+        } else if (color_selected == 3) { // Azul seleccionado
+            ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, brightness);
+            ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
+        } else { // No seleccionado (apagar todos los LEDs)
+            ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
+            ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
+            ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
+            ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+            ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+            ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
+        }
+
+        delay_ms(100); // Pequeño retardo para permitir cambios de brillo más suaves
     }
 }
