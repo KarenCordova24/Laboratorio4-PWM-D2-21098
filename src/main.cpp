@@ -1,87 +1,156 @@
-//Karen Córdova- 21098- Laboratorio 
+// Karen Córdova- 21098-postlab4
 
 #include <Arduino.h>
-#include "driver/ledc.h"
+#include <driver/ledc.h>
 
-#define LED_R       23  // GPIO para el LED Rojo
-#define LED_G       22  // GPIO para el LED Verde
-#define LED_B       21  // GPIO para el LED Azul
-#define BTN_COLOR_SELECT 18  // GPIO para el botón de selección de color (B3)
-#define BTN_BRIGHTNESS   19  // GPIO para el botón de brillo (B4)
+// Definición de pines
+#define LED_R           23
+#define LED_G           22
+#define LED_B           21
+#define BTN_COLOR_SELECT 18
+#define BTN_BRIGHTNESS   19
+#define BTN_SERVO_INC    4
+#define BTN_SERVO_DEC    5
+#define SERVO_PIN        15
 
-#define LEDC_TEST_CH_NUM       3 // Número de canales PWM utilizados (uno por cada color)
-#define LEDC_TEST_DUTY         5000 // Valor máximo del ciclo de trabajo (máximo brillo)
-#define LEDC_TEST_FADE_TIME    100 // Tiempo de desvanecimiento (ms) para cambios de brillo más suaves
+// Variables para el servo
+int servoPosition = 0;
+const int servoMinPosition = 0;
+const int servoMaxPosition = 180;
+const int servoIncrement = 1;
 
-void setup() {
-  pinMode(LED_R, OUTPUT);
-  pinMode(LED_G, OUTPUT);
-  pinMode(LED_B, OUTPUT);
-  pinMode(BTN_COLOR_SELECT, INPUT_PULLUP);
-  pinMode(BTN_BRIGHTNESS, INPUT_PULLUP);
+// Variables para controlar los LEDs y el servo
+int selectedLED = 0;
+int brightness = 128;
+bool servoMoved = false;
 
-  // Configuración de los temporizadores del LEDC
-  ledcSetup(LEDC_CHANNEL_0, 5000, 13);
-  ledcSetup(LEDC_CHANNEL_1, 5000, 13);
-  ledcSetup(LEDC_CHANNEL_2, 5000, 13);
+// Variables para el debounce de los botones
+unsigned long lastButton1Time = 0;
+unsigned long lastButton2Time = 0;
+unsigned long lastButton3Time = 0;
+const unsigned long debounceDelay = 50;
 
-  ledcAttachPin(LED_R, LEDC_CHANNEL_0);
-  ledcAttachPin(LED_G, LEDC_CHANNEL_1);
-  ledcAttachPin(LED_B, LEDC_CHANNEL_2);
+// Función para mover el servo a la posición deseada
+void moveServo() {
+  ledcWrite(0, map(servoPosition, 0, 180, 0, 1023));
 }
 
+// Configuración inicial
+void setup() {
+  pinMode(BTN_COLOR_SELECT, INPUT_PULLUP);
+  pinMode(BTN_BRIGHTNESS, INPUT_PULLUP);
+  pinMode(BTN_SERVO_INC, INPUT_PULLUP);
+  pinMode(BTN_SERVO_DEC, INPUT_PULLUP);
+  pinMode(SERVO_PIN, OUTPUT);
+
+  // Configuración de los canales LEDC para los LEDs
+  ledcSetup(1, 5000, 8); // Canal 1, frecuencia 5000 Hz, resolución de 8 bits (LED_R)
+  ledcSetup(2, 5000, 8); // Canal 2, frecuencia 5000 Hz, resolución de 8 bits (LED_G)
+  ledcSetup(3, 5000, 8); // Canal 3, frecuencia 5000 Hz, resolución de 8 bits (LED_B)
+
+  ledcAttachPin(LED_R, 1); // Asignar el pin del LED_R al canal 1
+  ledcAttachPin(LED_G, 2); // Asignar el pin del LED_G al canal 2
+  ledcAttachPin(LED_B, 3); // Asignar el pin del LED_B al canal 3
+
+  // Configuración del canal LEDC para el servo
+  ledcSetup(0, 50, 10); // Canal 0, frecuencia 50 Hz, resolución de 10 bits
+  ledcAttachPin(SERVO_PIN, 0); // Asignar el pin del servo al canal 0
+  moveServo(); // Mover el servo a la posición inicial
+
+  // Iniciar comunicación con el monitor serial
+  Serial.begin(115200);
+  while (!Serial); // Esperar hasta que se establezca la comunicación serial
+}
+
+// Función principal que se ejecuta repetidamente
 void loop() {
-  int current_led = 0; // Variable para almacenar el índice del LED actual (0: Rojo, 1: Verde, 2: Azul)
-  int brightness = 0; // Variable para almacenar el brillo actual del LED seleccionado
-  int color_selected = 0; // Variable para indicar el LED seleccionado (0 = No seleccionado, 1 = Rojo, 2 = Verde, 3 = Azul)
+  // Leer el estado de los botones
+  int button1State = digitalRead(BTN_SERVO_INC);
+  int button2State = digitalRead(BTN_SERVO_DEC);
+  int buttonColorState = digitalRead(BTN_COLOR_SELECT);
+  int buttonBrightnessState = digitalRead(BTN_BRIGHTNESS);
 
-  int last_btn_color_state = HIGH;
-
-  while (1) {
-    int btn_color_state = digitalRead(BTN_COLOR_SELECT);
-
-    if (btn_color_state == LOW && last_btn_color_state == HIGH) {
-      // Apagar el LED anterior (si está encendido)
-      if (color_selected == 1) {
-        ledcWrite(LEDC_CHANNEL_0, 0);
-      } else if (color_selected == 2) {
-        ledcWrite(LEDC_CHANNEL_1, 0);
-      } else if (color_selected == 3) {
-        ledcWrite(LEDC_CHANNEL_2, 0);
-      }
-
-      color_selected = (color_selected + 1) % 4; // Cambiar al siguiente color (Rojo -> Verde -> Azul -> No seleccionado)
-
-      delay(200); // Pequeño retardo para evitar rebotes del botón
-    }
-
-    last_btn_color_state = btn_color_state;
-
-    int btn_brightness_state = digitalRead(BTN_BRIGHTNESS);
-
-    if (btn_brightness_state == LOW) {
-      brightness += 500; // Aumentar el brillo en 500 unidades
-
-      if (brightness >= LEDC_TEST_DUTY) {
-        brightness = 0;
-      }
-
-      delay(200); // Pequeño retardo para evitar rebotes del botón
-    }
-
-    // Configurar el brillo del LED seleccionado
-    if (color_selected == 1) { // Rojo seleccionado
-      ledcWrite(LEDC_CHANNEL_0, brightness);
-    } else if (color_selected == 2) { // Verde seleccionado
-      ledcWrite(LEDC_CHANNEL_1, brightness);
-    } else if (color_selected == 3) { // Azul seleccionado
-      ledcWrite(LEDC_CHANNEL_2, brightness);
-    } else { // No seleccionado (apagar todos los LEDs)
-      ledcWrite(LEDC_CHANNEL_0, 0);
-      ledcWrite(LEDC_CHANNEL_1, 0);
-      ledcWrite(LEDC_CHANNEL_2, 0);
-    }
-
-    delay(100); // Pequeño retardo para permitir cambios de brillo más suaves
+  // Cambiar el color de los LEDs si se presiona el botón correspondiente
+  if (buttonColorState == LOW && millis() - lastButton3Time > debounceDelay) {
+    selectedLED = (selectedLED + 1) % 4;
+    servoMoved = false;
+    delay(200);
+    lastButton3Time = millis();
   }
+
+  // Cambiar el brillo de los LEDs si se presiona el botón correspondiente
+  if (buttonBrightnessState == LOW && millis() - lastButton2Time > debounceDelay) {
+    brightness += 20;
+    if (brightness > 255) {
+      brightness = 0;
+    }
+    delay(200);
+    lastButton2Time = millis();
+  }
+
+  // Controlar el servo basado en la selección del color
+  if (!servoMoved) {
+    if (selectedLED == 1) {
+      servoPosition = 5;
+    } else if (selectedLED == 2) {
+      servoPosition = 14;
+    } else if (selectedLED == 3) {
+      servoPosition = 25;
+    }
+    moveServo();
+    servoMoved = true;
+  }
+
+  // Mover el servo hacia adelante si se presiona el botón de incremento
+  if (button1State == LOW && millis() - lastButton1Time > debounceDelay) {
+    if (servoPosition < servoMaxPosition) {
+      servoPosition += servoIncrement;
+      if (servoPosition > servoMaxPosition) {
+        servoPosition = servoMaxPosition;
+      }
+      moveServo();
+    }
+    lastButton1Time = millis();
+  }
+
+  // Mover el servo hacia atrás si se presiona el botón de decremento
+  if (button2State == LOW && millis() - lastButton2Time > debounceDelay) {
+    if (servoPosition > servoMinPosition) {
+      servoPosition -= servoIncrement;
+      if (servoPosition < servoMinPosition) {
+        servoPosition = servoMinPosition;
+      }
+      moveServo();
+    }
+    lastButton2Time = millis();
+  }
+
+  // Actualizar los LEDs según la selección del color
+  switch (selectedLED) {
+    case 1:
+      ledcWrite(1, brightness);
+      ledcWrite(2, 0);
+      ledcWrite(3, 0);
+      break;
+    case 2:
+      ledcWrite(1, 0);
+      ledcWrite(2, brightness);
+      ledcWrite(3, 0);
+      break;
+    case 3:
+      ledcWrite(1, 0);
+      ledcWrite(2, 0);
+      ledcWrite(3, brightness);
+      break;
+    default:
+      ledcWrite(1, 0);
+      ledcWrite(2, 0);
+      ledcWrite(3, 0);
+      break;
+  }
+
+  // Mostrar la posición actual del servo en el monitor serial
+  Serial.println("Posición del servo: " + String(servoPosition));
+
+  delay(100);
 }
